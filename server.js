@@ -1,31 +1,4 @@
-// ============================================================
-// FILE 1: package.json
-// ============================================================
-/*
-{
-  "name": "asistent-zyre-backend",
-  "version": "1.0.0",
-  "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "@supabase/supabase-js": "^2.39.0",
-    "bcryptjs": "^2.4.3",
-    "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1",
-    "mammoth": "^1.7.0",
-    "xlsx": "^0.18.5",
-    "pdfjs-dist": "^3.11.174",
-    "node-fetch": "^2.7.0",
-    "dotenv": "^16.3.1"
-  }
-}
-*/
 
-// ============================================================
-// FILE 2: server.js
-// ============================================================
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
