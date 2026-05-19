@@ -3,13 +3,13 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
+const ws = require('ws');
 const { createClient } = require('@supabase/supabase-js');
 const mammoth = require('mammoth');
 const XLSX = require('xlsx');
 
 const app = express();
 
-// ── CORS — lejo të gjitha origjinat ──
 app.use(cors({
   origin: '*',
   methods: ['GET','POST','DELETE','OPTIONS'],
@@ -20,7 +20,12 @@ app.options('*', cors());
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 app.use(express.json({ limit: '10mb' }));
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY,
+  { realtime: { transport: ws } }
+);
+
 const JWT_SECRET = process.env.JWT_SECRET || 'secret123';
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 
@@ -84,7 +89,6 @@ app.post('/api/upload', auth, upload.single('file'), async (req, res) => {
     let text = '';
 
     if (ext === 'pdf') {
-      // Dërgo direkt te Claude si dokument PDF
       text = await claudePDF(buffer);
     } else if (['doc', 'docx'].includes(ext)) {
       const r = await mammoth.extractRawText({ buffer });
