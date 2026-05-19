@@ -27,7 +27,9 @@ const supabase = createClient(
 );
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret123';
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+const GEMINI_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
+const GEMINI_VISION_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
 
 // ── Auth middleware ──
 function auth(req, res, next) {
@@ -42,7 +44,7 @@ function auth(req, res, next) {
 }
 
 // ── Health check ──
-app.get('/', (req, res) => res.json({ status: 'OK', message: 'Asistent Zyre Backend' }));
+app.get('/', (req, res) => res.json({ status: 'OK', message: 'Asistent Zyre Backend — Gemini' }));
 
 // ── LOGIN ──
 app.post('/api/login', (req, res) => {
@@ -89,7 +91,7 @@ app.post('/api/upload', auth, upload.single('file'), async (req, res) => {
     let text = '';
 
     if (ext === 'pdf') {
-      text = await claudePDF(buffer);
+      text = await geminiPDF(buffer);
     } else if (['doc', 'docx'].includes(ext)) {
       const r = await mammoth.extractRawText({ buffer });
       text = r.value;
@@ -101,7 +103,7 @@ app.post('/api/upload', auth, upload.single('file'), async (req, res) => {
     } else if (['ppt', 'pptx'].includes(ext)) {
       text = await extractPPT(buffer);
     } else if (['png','jpg','jpeg','bmp','gif','tiff','webp'].includes(ext)) {
-      text = await claudeImage(buffer.toString('base64'), mimetype);
+      text = await geminiImage(buffer.toString('base64'), mimetype);
     } else {
       return res.status(400).json({ error: 'Format i pambështetur' });
     }
@@ -138,29 +140,36 @@ app.post('/api/chat', auth, async (req, res) => {
         '\n\n=== FUND ===\n\n';
     }
 
-    const messages = [
-      ...(Array.isArray(history) ? history.slice(-10) : []),
-      { role: 'user', content: ctx + 'Pyetja: ' + message }
-    ];
+    // Build conversation history for Gemini
+    const contents = [];
+    if (Array.isArray(history)) {
+      history.slice(-10).forEach(h => {
+        contents.push({
+          role: h.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: h.content }]
+        });
+      });
+    }
+    contents.push({
+      role: 'user',
+      parts: [{ text: ctx + 'Pyetja: ' + message }]
+    });
 
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await fetch(GEMINI_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_KEY,
-        'anthropic-version': '2023-06-01'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1500,
-        system: 'Ti je një asistent zyre inteligjent dhe profesional. Gjithmonë përgjigju VETËM në shqip. Përdor dokumentat si kontekst kryesor dhe kombino me njohuri të përgjithshme kur nevojitet.',
-        messages
+        systemInstruction: {
+          parts: [{ text: 'Ti je një asistent zyre inteligjent dhe profesional. Gjithmonë përgjigju VETËM në shqip, pavarësisht gjuhës së pyetjes. Përdor dokumentat si kontekst kryesor dhe kombino me njohuri të përgjithshme kur nevojitet. Jep përgjigje të sakta, logjike dhe të qarta.' }]
+        },
+        contents,
+        generationConfig: { maxOutputTokens: 1500, temperature: 0.7 }
       })
     });
 
     const data = await resp.json();
     if (data.error) return res.status(500).json({ error: data.error.message });
-    const reply = data?.content?.map(b => b.text || '').join('') || 'Nuk mora përgjigje.';
+    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text || 'Nuk mora përgjigje.';
     res.json({ reply });
 
   } catch (e) {
@@ -169,55 +178,45 @@ app.post('/api/chat', auth, async (req, res) => {
   }
 });
 
-// ── Claude PDF OCR ──
-async function claudePDF(buffer) {
+// ── Gemini PDF OCR ──
+async function geminiPDF(buffer) {
   const b64 = buffer.toString('base64');
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+  const resp = await fetch(GEMINI_VISION_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_KEY,
-      'anthropic-version': '2023-06-01'
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4000,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } },
-          { type: 'text', text: 'Ekstrakto të gjithë tekstin nga ky PDF. Kthe vetëm tekstin e plotë, pa komente.' }
+      contents: [{
+        parts: [
+          { inline_data: { mime_type: 'application/pdf', data: b64 } },
+          { text: 'Ekstrakto të gjithë tekstin nga ky PDF. Kthe vetëm tekstin e plotë, pa komente shtesë.' }
         ]
-      }]
+      }],
+      generationConfig: { maxOutputTokens: 4000 }
     })
   });
   const d = await resp.json();
-  return d?.content?.map(b => b.text || '').join('') || '';
+  if (d.error) throw new Error(d.error.message);
+  return d?.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
-// ── Claude Image OCR ──
-async function claudeImage(b64, mediaType) {
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+// ── Gemini Image OCR ──
+async function geminiImage(b64, mediaType) {
+  const resp = await fetch(GEMINI_VISION_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_KEY,
-      'anthropic-version': '2023-06-01'
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } },
-          { type: 'text', text: 'Ekstrakto të gjithë tekstin nga ky imazh.' }
+      contents: [{
+        parts: [
+          { inline_data: { mime_type: mediaType, data: b64 } },
+          { text: 'Ekstrakto të gjithë tekstin nga ky imazh.' }
         ]
-      }]
+      }],
+      generationConfig: { maxOutputTokens: 2000 }
     })
   });
   const d = await resp.json();
-  return d?.content?.map(b => b.text || '').join('') || '';
+  if (d.error) throw new Error(d.error.message);
+  return d?.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
 // ── PPT extraction ──
