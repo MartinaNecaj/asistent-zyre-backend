@@ -27,9 +27,12 @@ const supabase = createClient(
 );
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret123';
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_KEY}`;
-const GEMINI_VISION_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_KEY}`;
+
+// ── Gemini fetch helper — URL ndërtohet në kohën e thirrjes ──
+function geminiURL() {
+  return `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`;
+}
+
 // ── Auth middleware ──
 function auth(req, res, next) {
   const h = req.headers.authorization;
@@ -118,7 +121,7 @@ app.post('/api/upload', auth, upload.single('file'), async (req, res) => {
     res.json({ id: data.id, name: data.name, size_chars: data.size_chars });
 
   } catch (e) {
-    console.error('Upload error:', e);
+    console.error('Upload error:', e.message);
     res.status(500).json({ error: 'Gabim: ' + e.message });
   }
 });
@@ -132,6 +135,8 @@ app.post('/api/chat', auth, async (req, res) => {
     if (docIds && docIds.length > 0) query = query.in('id', docIds);
     const { data: docs } = await query;
 
+    const SYS = 'Ti je një asistent zyre inteligjent dhe profesional. Gjithmonë përgjigju VETËM në shqip. Përdor dokumentat si kontekst kryesor dhe kombino me njohuri të përgjithshme kur nevojitet.';
+
     let ctx = '';
     if (docs && docs.length > 0) {
       ctx = '=== DOKUMENTAT ===\n\n' +
@@ -139,8 +144,12 @@ app.post('/api/chat', auth, async (req, res) => {
         '\n\n=== FUND ===\n\n';
     }
 
-    // Build conversation history for Gemini
-    const contents = [];
+    // Build contents — system si mesazh i parë user/model
+    const contents = [
+      { role: 'user', parts: [{ text: SYS }] },
+      { role: 'model', parts: [{ text: 'Kuptova. Do të përgjigjem gjithmonë në shqip.' }] }
+    ];
+
     if (Array.isArray(history)) {
       history.slice(-10).forEach(h => {
         contents.push({
@@ -149,30 +158,31 @@ app.post('/api/chat', auth, async (req, res) => {
         });
       });
     }
+
     contents.push({
       role: 'user',
       parts: [{ text: ctx + 'Pyetja: ' + message }]
     });
 
-    const resp = await fetch(GEMINI_URL, {
+    const resp = await fetch(geminiURL(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: 'Ti je një asistent zyre inteligjent dhe profesional. Gjithmonë përgjigju VETËM në shqip, pavarësisht gjuhës së pyetjes. Përdor dokumentat si kontekst kryesor dhe kombino me njohuri të përgjithshme kur nevojitet. Jep përgjigje të sakta, logjike dhe të qarta.' }]
-        },
         contents,
         generationConfig: { maxOutputTokens: 1500, temperature: 0.7 }
       })
     });
 
     const data = await resp.json();
-    if (data.error) return res.status(500).json({ error: data.error.message });
+    if (data.error) {
+      console.error('Gemini error:', data.error.message);
+      return res.status(500).json({ error: data.error.message });
+    }
     const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text || 'Nuk mora përgjigje.';
     res.json({ reply });
 
   } catch (e) {
-    console.error('Chat error:', e);
+    console.error('Chat error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -180,7 +190,7 @@ app.post('/api/chat', auth, async (req, res) => {
 // ── Gemini PDF OCR ──
 async function geminiPDF(buffer) {
   const b64 = buffer.toString('base64');
-  const resp = await fetch(GEMINI_VISION_URL, {
+  const resp = await fetch(geminiURL(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -200,7 +210,7 @@ async function geminiPDF(buffer) {
 
 // ── Gemini Image OCR ──
 async function geminiImage(b64, mediaType) {
-  const resp = await fetch(GEMINI_VISION_URL, {
+  const resp = await fetch(geminiURL(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
